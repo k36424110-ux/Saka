@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Scalp BTC · Order flow 3 exchanges</title>
+<style>
+:root{--bg:#101820;--ink:#e9e4d8;--mute:#8b95a1;--line:#233140;--buy:#4cc9b0;--sell:#ff6b7a;--amb:#f2b84b;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 24px);max-width:640px;margin:0 auto;font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums}
+header{position:sticky;top:0;background:var(--bg);padding:12px 0 10px;border-bottom:1px solid var(--line);z-index:5}
+.px{font-size:30px;font-weight:700;letter-spacing:-.5px}.dots{float:right;font-size:12px;color:var(--mute);padding-top:10px}
+.dots i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sell);margin:0 3px 0 10px}.dots i.on{background:var(--buy)}
+.bias{display:inline-block;margin-top:4px;padding:3px 10px;border-radius:4px;font-weight:700;font-size:14px}
+section{padding:16px 0;border-bottom:1px solid var(--line)}
+h2{font-size:16px;margin:0 0 8px;font-weight:700}
+.r{display:flex;justify-content:space-between;gap:12px;padding:4px 0}.r span:first-child{color:var(--mute)}
+.b{color:var(--buy)}.s{color:var(--sell)}.a{color:var(--amb)}.m{color:var(--mute)}
+.plan{border-left:4px solid var(--amb);padding-left:12px}
+.big{font-size:19px;font-weight:700;margin-bottom:6px}
+.z{display:flex;justify-content:space-between;padding:6px 0;border-top:1px dashed var(--line);font-size:14px}
+.z small{display:block;color:var(--mute);font-size:12px}
+.bar{height:4px;background:var(--amb);border-radius:2px;margin-top:3px}
+.note{font-size:12px;color:var(--mute);margin-top:10px}
+</style></head><body>
+<header><div class="dots" id="dots"></div><div class="px" id="px">—</div><span class="bias" id="bias">Chargement…</span></header>
+<section class="plan"><h2>Plan de trade (5 min)</h2><div id="plan" class="m">Collecte des données en cours…</div></section>
+<section><h2>Lecture</h2><div id="txt" class="m"></div></section>
+<section><h2>Order flow combiné</h2><div id="flow"></div></section>
+<section><h2>Absorption et exhaustion</h2><div id="sig"></div></section>
+<section><h2>Liquidations, OI, funding</h2><div id="der"></div></section>
+<section><h2>Tendance</h2><div id="trend"></div></section>
+<section><h2>Zones de réaction probables</h2><div id="zones"></div></section>
+<section><h2>Gros trades (2 min)</h2><div id="big"></div></section>
+<p class="note">Données publiques Binance, Bybit, OKX (BTC perpétuel). Les niveaux de liquidation sont des estimations, pas des positions réelles. Aucune garantie de gain : ceci n'est pas un conseil financier. Les calculs d'order flow démarrent à l'ouverture de la page : laisse-la ouverte quelques minutes.</p>
+<script>
+const S={trades:[],liqs:[],bk:{binance:null,bybit:{b:new Map(),a:new Map()},okx:null},oi:{},fund:{},conn:{binance:0,bybit:0,okx:0},oiH:[],K:{}},NOW=()=>Date.now();
+function addT(x,p,q,s){S.trades.push({t:NOW(),p,q,s,x});S.px=p}
+function addL(x,side,q,p){S.liqs.push({t:NOW(),x,side,q,p,usd:q*p})}
+function ws(n,url,open,msg){const c=()=>{const w=new WebSocket(url);w.onopen=()=>{S.conn[n]=1;open&&open(w)};w.onmessage=e=>{try{msg(JSON.parse(e.data))}catch(_){}};w.onclose=()=>{S.conn[n]=0;setTimeout(c,3000)};w.onerror=()=>w.close()};c()}
+/* Binance */
+ws('binance','wss://fstream.binance.com/stream?streams=btcusdt@aggTrade/btcusdt@depth20@100ms/btcusdt@forceOrder/btcusdt@markPrice@1s',null,m=>{const d=m.data;if(!d)return;
+ if(d.e==='aggTrade')addT('binance',+d.p,+d.q,d.m?-1:1);
+ else if(d.e==='forceOrder')addL('binance',d.o.S==='SELL'?'long':'short',+d.o.q,+(d.o.ap||d.o.p));
+ else if(d.e==='markPriceUpdate')S.fund.binance=+d.r;
+ else if(d.b)S.bk.binance={b:d.b.map(x=>[+x[0],+x[1]]),a:d.a.map(x=>[+x[0],+x[1]])}});
+/* Bybit */
+let byT;ws('bybit','wss://stream.bybit.com/v5/public/linear',w=>{w.send(JSON.stringify({op:'subscribe',args:['publicTrade.BTCUSDT','allLiquidation.BTCUSDT','orderbook.50.BTCUSDT','tickers.BTCUSDT']}));clearInterval(byT);byT=setInterval(()=>{try{w.send('{"op":"ping"}')}catch(_){}},20000)},m=>{const t=m.topic||'',d=m.data;if(!d)return;
+ if(t.startsWith('publicTrade'))d.forEach(x=>addT('bybit',+x.p,+x.v,x.S==='Buy'?1:-1));
+ else if(t.startsWith('allLiquidation'))d.forEach(x=>addL('bybit',x.S==='Buy'?'long':'short',+x.v,+x.p));
+ else if(t.startsWith('orderbook')){const B=S.bk.bybit;if(m.type==='snapshot'){B.b.clear();B.a.clear()}
+  d.b.forEach(([p,q])=>+q?B.b.set(+p,+q):B.b.delete(+p));d.a.forEach(([p,q])=>+q?B.a.set(+p,+q):B.a.delete(+p))}
+ else if(t.startsWith('tickers')){if(d.openInterest)S.oi.bybit=+d.openInterest;if(d.fundingRate)S.fund.bybit=+d.fundingRate}});
+/* OKX (1 contrat = 0.01 BTC) */
+let okT;const I='BTC-USDT-SWAP';ws('okx','wss://ws.okx.com:8443/ws/v5/public',w=>{w.send(JSON.stringify({op:'subscribe',args:[{channel:'trades',instId:I},{channel:'books5',instId:I},{channel:'liquidation-orders',instType:'SWAP'},{channel:'open-interest',instId:I}]}));clearInterval(okT);okT=setInterval(()=>{try{w.send('ping')}catch(_){}},25000)},m=>{const c=m.arg&&m.arg.channel,d=m.data;if(!d)return;
+ if(c==='trades')d.forEach(x=>addT('okx',+x.px,+x.sz*.01,x.side==='buy'?1:-1));
+ else if(c==='books5'){const k=d[0];S.bk.okx={b:k.bids.map(x=>[+x[0],+x[1]*.01]),a:k.asks.map(x=>[+x[0],+x[1]*.01])}}
+ else if(c==='liquidation-orders')d.forEach(x=>{if((x.instId||'').startsWith('BTC-USDT'))(x.details||[]).forEach(y=>addL('okx',y.posSide==='long'?'long':'short',+y.sz*.01,+y.bkPx))})
+ else if(c==='open-interest')S.oi.okx=+d[0].oiCcy});
+/* REST : OI Binance + bougies */
+async function oiB(){try{const r=await(await fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT')).json();S.oi.binance=+r.openInterest}catch(_){}}
+async function kl(k,bi,by){let c;try{const r=await(await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=${bi}&limit=300`)).json();c=r.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}))}catch(_){try{const r=await(await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${by}&limit=300`)).json();c=r.result.list.reverse().map(x=>({t:+x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}))}catch(_){}}if(c&&c.length>60)S.K[k]=c}
+const loadK=()=>{kl('m5','5m','5');kl('m15','15m','15');kl('h1','1h','60')};
+oiB();loadK();setInterval(oiB,15000);setInterval(loadK,60000);
+setInterval(()=>{const v=(S.oi.binance||0)+(S.oi.bybit||0)+(S.oi.okx||0);if(v)S.oiH.push({t:NOW(),v});const lim=NOW()-3600e3;S.oiH=S.oiH.filter(x=>x.t>lim);S.trades=S.trades.filter(x=>x.t>NOW()-1800e3);S.liqs=S.liqs.filter(x=>x.t>NOW()-1800e3)},5000);
+/* Analyse */
+const ema=(a,n)=>{const k=2/(n+1);let e=a[0];for(const v of a)e=v*k+e*(1-k);return e};
+const atr=c=>{let s=0;const x=c.slice(-15);for(let i=1;i<x.length;i++)s+=Math.max(x[i].h-x[i].l,Math.abs(x[i].h-x[i-1].c),Math.abs(x[i].l-x[i-1].c));return s/14};
+const win=ms=>S.trades.filter(x=>x.t>NOW()-ms),dl=a=>a.reduce((s,x)=>s+x.s*x.q,0);
+function trendOf(c){if(!c)return{s:0,l:'n/a'};const cl=c.map(x=>x.c),p=cl[cl.length-1],e20=ema(cl.slice(-60),20),e50=ema(cl.slice(-120),50);
+ return p>e20&&e20>e50?{s:1,l:'Haussière'}:p<e20&&e20<e50?{s:-1,l:'Baissière'}:{s:0,l:'Range'}}
+function profile(c){const bin=25,m=new Map();let tot=0;c.forEach(x=>{const b=Math.round((x.h+x.l+x.c)/3/bin)*bin;m.set(b,(m.get(b)||0)+x.v);tot+=x.v});
+ const a=[...m].sort((x,y)=>y[1]-x[1]),u=[a[0][0]];let acc=a[0][1];for(let i=1;i<a.length&&acc<tot*.7;i++){acc+=a[i][1];u.push(a[i][0])}
+ return{poc:a[0][0],vah:Math.max(...u),val:Math.min(...u)}}
+function liqMap(c,price){const sm=[],sx=[];let mn=1e9,mx=0;for(let i=c.length-1;i>=0;i--){sm[i]=mn;sx[i]=mx;mn=Math.min(mn,c[i].l);mx=Math.max(mx,c[i].h)}
+ const W={10:.15,25:.3,50:.35,100:.2},L=new Map(),H=new Map();
+ c.forEach((x,i)=>{for(const k in W){const l=+k,w=W[k]*x.v,lo=x.c*(1-1/l+.005),hi=x.c*(1+1/l-.005);
+  if(lo<price&&sm[i]>lo){const b=Math.round(lo/100)*100;L.set(b,(L.get(b)||0)+w)}
+  if(hi>price&&sx[i]<hi){const b=Math.round(hi/100)*100;H.set(b,(H.get(b)||0)+w)}}});
+ const top=m=>{const a=[...m].sort((x,y)=>y[1]-x[1]).slice(0,3);const mx=a[0]?a[0][1]:1;return a.map(([p,v])=>({p,w:v/mx}))};return{longs:top(L),shorts:top(H)}}
+function vpin(){const V=5,bs=[];let b=0,s=0;for(const t of S.trades){let q=t.q;while(q>0){const f=Math.min(q,V-b-s);t.s>0?b+=f:s+=f;q-=f;if(b+s>=V-1e-9){bs.push(Math.abs(b-s)/V);b=s=0}}}const l=bs.slice(-20);return l.length>=8?l.reduce((x,y)=>x+y,0)/l.length:null}
+function book(price){const m={b:new Map(),a:new Map()},add=(M,p,q)=>{const k=Math.round(p/10)*10;M.set(k,(M.get(k)||0)+q)};
+ for(const x of['binance','okx']){const k=S.bk[x];if(k){k.b.forEach(r=>add(m.b,r[0],r[1]));k.a.forEach(r=>add(m.a,r[0],r[1]))}}
+ S.bk.bybit.b.forEach((q,p)=>add(m.b,p,q));S.bk.bybit.a.forEach((q,p)=>add(m.a,p,q));
+ const near=M=>{let s=0;M.forEach((q,p)=>{if(Math.abs(p-price)/price<.0015)s+=q});return s},bv=near(m.b),av=near(m.a);
+ const wall=(M,sd)=>{let best=null;M.forEach((q,p)=>{if((sd>0?p<price:p>price)&&Math.abs(p-price)/price<.01&&(!best||q>best.q))best={p,q}});return best};
+ return{imb:bv+av?bv/(bv+av):.5,bw:wall(m.b,1),aw:wall(m.a,-1)}}
+const f0=n=>Math.round(n).toLocaleString('fr-FR'),f1=(n,d=1)=>(+n).toLocaleString('fr-FR',{maximumFractionDigits:d,minimumFractionDigits:d}),sg=(n,d=1)=>(n>0?'+':'')+f1(n,d),cl=n=>n>0?'b':n<0?'s':'m';
+const row=(a,b,c='')=>`<div class="r"><span>${a}</span><span class="${c}">${b}</span></div>`;
+function render(){const price=S.px;document.getElementById('dots').innerHTML=['binance','bybit','okx'].map(x=>`${x}<i class="${S.conn[x]?'on':''}"></i>`).join('');
+ if(!price||!S.K.m5){document.getElementById('px').textContent=price?f0(price):'—';return}
+ const K=S.K,m5=K.m5.slice(-288),A=atr(K.m5),tr={h1:trendOf(K.h1),m15:trendOf(K.m15),m5:trendOf(K.m5)};
+ const d30=dl(win(30e3)),d5=dl(win(300e3)),d60=dl(win(60e3)),dprev=dl(win(120e3))-d60,vp=vpin(),bk=book(price);
+ const per=['binance','bybit','okx'].map(x=>dl(win(60e3).filter(t=>t.x===x)));
+ /* absorption */
+ const w30=win(30e3),pr=w30.map(x=>x.p),rng=pr.length?Math.max(...pr)-Math.min(...pr):0;let avgAbs=0,n=0;for(let i=1;i<=20;i++){const a=S.trades.filter(x=>x.t<NOW()-i*30e3+30e3&&x.t>=NOW()-i*30e3);if(a.length){avgAbs+=Math.abs(dl(a));n++}}avgAbs=n>=4?avgAbs/n:null;
+ let ab=0,abT='Pas d\'absorption détectée';if(avgAbs&&Math.abs(d30)>1.5*avgAbs&&rng<.25*A){ab=d30<0?1:-1;abT=d30<0?'Absorption acheteuse : les vendeurs agressifs sont absorbés, le prix tient (signal haussier)':'Absorption vendeuse : les acheteurs agressifs sont absorbés, le prix plafonne (signal baissier)'}
+ const p5=win(300e3).map(x=>x.p);let ex=0,exT='Pas d\'exhaustion détectée';if(p5.length>50){const hi=Math.max(...p5),lo=Math.min(...p5);
+  if(price>=hi*.9998&&dprev>0&&d60<.3*dprev){ex=-1;exT='Exhaustion haussière : nouveau sommet avec un delta qui faiblit (risque de retournement baissier)'}
+  else if(price<=lo*1.0002&&dprev<0&&d60>.3*dprev){ex=1;exT='Exhaustion vendeuse : nouveau creux avec un delta qui faiblit (risque de rebond)'}}
+ /* dérivés */
+ const lq=S.liqs.filter(x=>x.t>NOW()-300e3),lL=lq.filter(x=>x.side==='long').reduce((s,x)=>s+x.usd,0),lS=lq.filter(x=>x.side==='short').reduce((s,x)=>s+x.usd,0);
+ const oi=(S.oi.binance||0)+(S.oi.bybit||0)+(S.oi.okx||0),o0=S.oiH.length?S.oiH[0].v:oi,oiCh=o0?(oi-o0)/o0*100:0;
+ const fv=Object.values(S.fund),fund=fv.length?fv.reduce((a,b)=>a+b,0)/fv.length*100:null;
+ const px5=m5[m5.length-13]?price-m5[m5.length-13].c:0;
+ /* biais */
+ let sc=tr.h1.s*2+tr.m15.s+tr.m5.s+(d5>0?1:d5<0?-1:0);if(oiCh>.3)sc+=px5>0?1:px5<0?-1:0;if(fund!==null)sc+=fund>.05?-1:fund<-.03?1:0;sc+=ab+ex;
+ const bl=sc>=3?'Haussier':sc<=-3?'Baissier':sc>=1?'Légèrement haussier':sc<=-1?'Légèrement baissier':'Neutre';
+ const be=document.getElementById('bias');be.textContent=`Biais ${bl} (${sg(sc,0)})`;be.style.background=sc>0?'#4cc9b033':sc<0?'#ff6b7a33':'#8b95a133';be.style.color=sc>0?'var(--buy)':sc<0?'var(--sell)':'var(--mute)';
+ document.getElementById('px').textContent=f0(price);
+ /* niveaux */
+ const pf=profile(m5),vw=m5.reduce((s,x)=>s+(x.h+x.l+x.c)/3*x.v,0)/m5.reduce((s,x)=>s+x.v,0),lm=liqMap(m5,price),h4=Math.max(...K.m5.slice(-48).map(x=>x.h)),l4=Math.min(...K.m5.slice(-48).map(x=>x.l));
+ const cd=[{p:vw,n:'VWAP'},{p:pf.poc,n:'POC'},{p:pf.vah,n:'VAH'},{p:pf.val,n:'VAL'},{p:h4,n:'Haut 4h'},{p:l4,n:'Bas 4h'}];
+ lm.longs.forEach(x=>cd.push({p:x.p,n:'Liq. longs'}));lm.shorts.forEach(x=>cd.push({p:x.p,n:'Liq. shorts'}));if(bk.bw)cd.push({p:bk.bw.p,n:'Mur achat'});if(bk.aw)cd.push({p:bk.aw.p,n:'Mur vente'});
+ cd.sort((a,b)=>a.p-b.p);const zs=[];cd.forEach(c=>{const l=zs[zs.length-1];if(l&&Math.abs(c.p-l.p)/price<.0008){l.src.push(c.n);l.p=(l.p*(l.src.length-1)+c.p)/l.src.length}else zs.push({p:c.p,src:[c.n]})});
+ /* plan */
+ let P='';if(Math.abs(sc)<2)P='<div class="big m">Pas de trade</div>Biais neutre ou contradictoire : attends que la tendance 1H/15M et le flux s\'alignent.';
+ else{const lg=sc>0,side=zs.filter(z=>lg?z.p<price:z.p>price).sort((a,b)=>lg?b.p-a.p:a.p-b.p),opp=zs.filter(z=>lg?z.p>price:z.p<price).sort((a,b)=>lg?a.p-b.p:b.p-a.p),z=side.find(z=>z.src.length>=2)||side[0];
+  if(!z)P='<div class="big m">Aucune zone exploitable</div>';else{const e=z.p,st=lg?e-.6*A:e+.6*A,r=Math.abs(e-st),t1=lg?e+1.5*r:e-1.5*r,t2=lg?e+2.5*r:e-2.5*r,act=Math.abs(price-e)/price<.001,cf=lg?(ab>0||(d30>0&&bk.imb>.55)):(ab<0||(d30<0&&bk.imb<.45)),fee=r/e>.0012;
+   const state=!fee?'Trop serré : les frais mangent le gain, passe':act&&cf?'ENTRER : zone touchée et flux confirmé':act?'ZONE ACTIVE : attends la confirmation du flux (delta ou absorption)':`ATTENDRE le retour sur ${f0(e)}`;
+   P=`<div class="big ${lg?'b':'s'}">${lg?'ACHAT':'VENTE'} · ${state}</div>${row('Zone d\'entrée',f0(e)+' ('+z.src.join(', ')+')')}${row('Invalidation / stop',f0(st),'s')}${row('Cible 1 (1,5R)',f0(t1),'b')}${row('Cible 2 (2,5R)',f0(t2),'b')}${row('Risque',f0(r)+' $ ('+f1(r/e*100,2)+' %)')}${opp[0]?row('Obstacle',f0(opp[0].p)+' ('+opp[0].src.join(', ')+')','a'):''}
+   <div class="note">Timing : entre seulement si la zone est touchée ET que le delta 30 s va dans ton sens. Si une bougie 5 min clôture au-delà du stop, le scénario est invalide. Évite les annonces macro (CPI, FOMC).</div>`}}
+ document.getElementById('plan').innerHTML=P;
+ /* lecture */
+ document.getElementById('txt').innerHTML=`Tendance 1H ${tr.h1.l.toLowerCase()}, 15M ${tr.m15.l.toLowerCase()}, 5M ${tr.m5.l.toLowerCase()}. Delta 5 min ${d5>0?'acheteur':'vendeur'} (${sg(d5,0)} BTC), flux ${bk.imb>.55?'avec un carnet plutôt acheteur':bk.imb<.45?'avec un carnet plutôt vendeur':'avec un carnet équilibré'}. ${abT}. ${exT}. ${lL+lS>5e5?`Liquidations 5 min : ${f1(lL/1e6,2)} M$ de longs et ${f1(lS/1e6,2)} M$ de shorts.`:'Peu de liquidations récentes.'} OI ${oiCh>0?'en hausse':'en baisse'} (${sg(oiCh,2)} %).`;
+ document.getElementById('flow').innerHTML=row('Delta 30 s',sg(d30,1)+' BTC',cl(d30))+row('Delta 5 min',sg(d5,1)+' BTC',cl(d5))+row('Delta 60 s Binance / Bybit / OKX',per.map(x=>sg(x,0)).join(' / '),cl(d60))+row('VPIN (toxicité du flux)',vp===null?'calcul…':f1(vp,2)+(vp>.5?' · élevé, volatilité probable':vp>.35?' · modéré':' · faible'),vp>.5?'a':'')+row('Déséquilibre carnet (±0,15 %)',f1(bk.imb*100,0)+' % acheteur',bk.imb>.55?'b':bk.imb<.45?'s':'')+(bk.bw?row('Plus gros mur d\'achat',f0(bk.bw.p)+' · '+f1(bk.bw.q,0)+' BTC','b'):'')+(bk.aw?row('Plus gros mur de vente',f0(bk.aw.p)+' · '+f1(bk.aw.q,0)+' BTC','s'):'');
+ document.getElementById('sig').innerHTML=`<div class="${ab>0?'b':ab<0?'s':'m'}">${abT}</div><div class="${ex>0?'b':ex<0?'s':'m'}" style="margin-top:8px">${exT}</div>`;
+ document.getElementById('der').innerHTML=row('Longs liquidés (5 min)',f1(lL/1e6,2)+' M$','s')+row('Shorts liquidés (5 min)',f1(lS/1e6,2)+' M$','b')+row('OI total (3 exchanges)',f0(oi)+' BTC')+row('Variation OI (depuis ouverture)',sg(oiCh,2)+' %',oiCh>0?'a':'')+row('Funding moyen',fund===null?'n/a':sg(fund,4)+' %',fund>.05?'s':fund<-.03?'b':'');
+ document.getElementById('trend').innerHTML=row('1H',tr.h1.l,cl(tr.h1.s))+row('15M',tr.m15.l,cl(tr.m15.s))+row('5M',tr.m5.l,cl(tr.m5.s))+row('ATR 5M',f0(A)+' $')+row('VWAP 24h / POC',f0(vw)+' / '+f0(pf.poc));
+ const near=zs.filter(z=>z.p>price).sort((a,b)=>a.p-b.p).slice(0,4).reverse().concat(zs.filter(z=>z.p<=price).sort((a,b)=>b.p-a.p).slice(0,4));
+ document.getElementById('zones').innerHTML=near.map(z=>`<div class="z"><div><span class="${z.p>price?'s':'b'}">${f0(z.p)}</span><small>${z.src.join(' + ')}</small></div><div class="${z.src.length>=3?'a':'m'}">${z.src.length>=3?'forte':z.src.length==2?'moyenne':'faible'}<small>${sg((z.p-price)/price*100,2)} %</small></div></div>`).join('');
+ const bg=win(120e3).filter(x=>x.q>=3).slice(-6).reverse();
+ document.getElementById('big').innerHTML=bg.length?bg.map(x=>row(x.x+' · '+f0(x.p),(x.s>0?'Achat ':'Vente ')+f1(x.q,1)+' BTC',x.s>0?'b':'s')).join(''):'<span class="m">Aucun trade de 3 BTC ou plus</span>'}
+setInterval(render,1000);render();
+</script></body></html>
